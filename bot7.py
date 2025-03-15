@@ -4,15 +4,12 @@ import pandas as pd
 import numpy as np
 import pickle
 from sklearn.metrics.pairwise import cosine_similarity
-from sentence_transformers import SentenceTransformer
-
-# ===== INIT EMBEDDER =====
-embedder = SentenceTransformer('all-MiniLM-L6-v2')
 
 # ===== CONFIGURATION =====
 token = os.environ["OPENAI_API_KEY"]  # Set in your environment
 endpoint = "https://models.inference.ai.azure.com"
-model_name = "gpt-4o"
+embedding_model = "text-embedding-3-small"
+chat_model = "gpt-4o"
 
 client = OpenAI(
     base_url=endpoint,
@@ -55,20 +52,54 @@ def create_finlit_documents(df):
 loan_documents = create_loan_documents(loan_df)
 finlit_documents = create_finlit_documents(finlit_df)
 
-# ===== LOAD EMBEDDINGS =====
-print("Loading precomputed embeddings from pickle files...")
-with open(r"C:\Users\anike\OneDrive\Desktop\GitHub\Python\practice\loan_dataset_embeddings.pkl", "rb") as f:
-    loan_embeddings = pickle.load(f)
+# ===== EMBEDDING FUNCTIONS =====
+def get_embedding(text):
+    response = client.embeddings.create(
+        input=[text],
+        model=embedding_model
+    )
+    return response.data[0].embedding
 
-with open(r"C:\Users\anike\OneDrive\Desktop\GitHub\Python\practice\financial_literacy_embeddings.pkl", "rb") as f:
-    finlit_embeddings = pickle.load(f)
+def compute_and_save_embeddings(documents, filename):
+    embeddings = []
+    for i, doc in enumerate(documents):
+        print(f"Embedding document {i+1}/{len(documents)}")
+        embedding = get_embedding(doc)
+        embeddings.append(embedding)
 
-print(f"Loaded {len(loan_embeddings)} loan embeddings.")
-print(f"Loaded {len(finlit_embeddings)} financial literacy embeddings.\n")
+    with open(filename, "wb") as f:
+        pickle.dump(embeddings, f)
+
+    print(f"Saved embeddings to {filename}")
+    return embeddings
+
+# ===== LOAD OR COMPUTE EMBEDDINGS =====
+loan_embeddings_file = r"C:\Users\anike\OneDrive\Desktop\GitHub\Python\practice\loan_dataset_embeddings_openai.pkl"
+finlit_embeddings_file = r"C:\Users\anike\OneDrive\Desktop\GitHub\Python\practice\financial_literacy_embeddings_openai.pkl"
+
+try:
+    with open(loan_embeddings_file, "rb") as f:
+        loan_embeddings = pickle.load(f)
+    print("Loaded loan embeddings.")
+except FileNotFoundError:
+    print("Loan embeddings not found. Generating...")
+    loan_embeddings = compute_and_save_embeddings(loan_documents, loan_embeddings_file)
+
+try:
+    with open(finlit_embeddings_file, "rb") as f:
+        finlit_embeddings = pickle.load(f)
+    print("Loaded financial literacy embeddings.")
+except FileNotFoundError:
+    print("Financial literacy embeddings not found. Generating...")
+    finlit_embeddings = compute_and_save_embeddings(finlit_documents, finlit_embeddings_file)
 
 # ===== EMBEDDING FUNCTION FOR QUERY =====
 def get_query_embedding(query):
-    return embedder.encode(query).tolist()
+    response = client.embeddings.create(
+        input=[query],
+        model=embedding_model
+    )
+    return response.data[0].embedding
 
 # ===== SIMILARITY SEARCH ACROSS BOTH DATASETS =====
 def find_most_relevant_documents(query, top_k=3):
@@ -117,7 +148,7 @@ def update_user_info():
     loan_purpose = input("What is the purpose of the loan you're interested in?: ").strip()
     if loan_purpose: user_info['Loan Purpose'] = loan_purpose
 
-    print("\n Your information has been updated!\n")
+    print("\nYour information has been updated!\n")
     print("Current User Info:")
     for key, value in user_info.items():
         print(f"{key}: {value}")
@@ -125,7 +156,7 @@ def update_user_info():
 
 # ===== GPT-4o ANSWER GENERATION FUNCTION =====
 def generate_answer(context, query):
-    system_prompt = "You are a helpful assistant providing information about bank loans and financial literacy tips."
+    system_prompt = "You are a helpful assistant providing information about bank loans and financial literacy tips from embedded data."
 
     # Combine user info into a string
     user_info_context = ""
@@ -138,7 +169,7 @@ def generate_answer(context, query):
     ]
     
     response = client.chat.completions.create(
-        model=model_name,
+        model=chat_model,
         messages=messages,
         temperature=0.2,
         max_tokens=300
