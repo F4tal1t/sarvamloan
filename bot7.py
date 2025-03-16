@@ -1,4 +1,5 @@
 import os
+import requests
 from openai import OpenAI
 import pandas as pd
 import numpy as np
@@ -11,10 +12,63 @@ endpoint = "https://models.inference.ai.azure.com"
 embedding_model = "text-embedding-3-small"
 chat_model = "gpt-4o"
 
+# Sarvam AI Translate API configuration
+sarvam_url = "https://api.sarvam.ai/translate"
+sarvam_api_key = "<your-sarvam-api-key>"  # Replace with your Sarvam API key
+
 client = OpenAI(
     base_url=endpoint,
     api_key=token,
 )
+
+# ===== TRANSLATION FUNCTIONS =====
+def translate_text(text, source_lang="auto", target_lang="en-IN"):
+    """
+    Translate text using Sarvam AI Translate API.
+    """
+    payload = {
+        "input": text,
+        "source_language_code": source_lang,
+        "target_language_code": target_lang,
+        "speaker_gender": "Female",  # Optional
+        "mode": "formal",  # Optional
+        "enable_preprocessing": False,  # Optional
+        "output_script": "roman",  # Optional
+        "numerals_format": "international"  # Optional
+    }
+    headers = {
+        "Content-Type": "application/json",
+        "api-subscription-key": sarvam_api_key
+    }
+
+    response = requests.post(sarvam_url, json=payload, headers=headers)
+    if response.status_code == 200:
+        return response.json().get("translated_text")
+    else:
+        print("Translation error:", response.status_code, response.json())
+        return None
+
+def detect_language(text):
+    """
+    Detect the language of the input text using Sarvam AI Translate API.
+    """
+    payload = {
+        "input": text,
+        "source_language_code": "auto",
+        "target_language_code": "en-IN"  # Target language doesn't matter for detection
+    }
+    headers = {
+        "Content-Type": "application/json",
+        "api-subscription-key": sarvam_api_key
+    }
+
+    response = requests.post(sarvam_url, json=payload, headers=headers)
+    if response.status_code == 200:
+        # Sarvam AI returns the detected language in the response
+        return response.json().get("source_language_code")
+    else:
+        print("Language detection error:", response.status_code, response.json())
+        return None
 
 # ===== LOAD THE DATASETS =====
 # Loan Dataset
@@ -200,16 +254,33 @@ def chat():
             update_user_info()
             continue
         
+        # Detect the user's input language
+        source_lang = detect_language(query)
+        if not source_lang:
+            print("Chatbot: Language detection failed. Please try again.")
+            continue
+
+        # Translate user input to English
+        translated_query = translate_text(query, source_lang=source_lang, target_lang="en-IN")
+        if not translated_query:
+            print("Chatbot: Translation failed. Please try again.")
+            continue
+        
         # Get top relevant documents from both datasets
-        top_docs = find_most_relevant_documents(query)
+        top_docs = find_most_relevant_documents(translated_query)
         
         # Combine into context
         context = "\n\n".join(top_docs)
         
         # Generate an answer from GPT-4o
-        answer = generate_answer(context, query)
+        answer = generate_answer(context, translated_query)
         
-        print(f"\nChatbot: {answer}\n")
+        # Translate the answer back to the user's language
+        translated_answer = translate_text(answer, source_lang="en-IN", target_lang=source_lang)
+        if not translated_answer:
+            translated_answer = answer  # Fallback to English if translation fails
+        
+        print(f"\nChatbot: {translated_answer}\n")
 
 # ===== RUN THE CHATBOT =====
 if __name__ == "__main__":
