@@ -1,3 +1,5 @@
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
 import os
 import requests
 from openai import OpenAI
@@ -10,7 +12,6 @@ from appwrite.client import Client
 from appwrite.services.databases import Databases
 import random
 import string
-from fastapi import FastAPI
 
 app = FastAPI()
 
@@ -312,125 +313,54 @@ def log_chat_interaction(user_id, query, response, language):
     except Exception as e:
         print(f"Failed to log chat interaction: {e}")
 
-# ===== MAIN CHAT FUNCTION =====
-def chat():
-    # Welcome message in English (will be translated later)
-    welcome_message = "Welcome to the Smart Finance Chatbot!"
-    instructions = "Ask your questions about loans or financial literacy."
-    update_info_prompt = "Type 'update info' to enter or update your personal info."
-    exit_prompt = "Type 'exit' to quit."
+# ===== CHATBOT ENDPOINT =====
+class ChatRequest(BaseModel):
+    query: str
+    user_id: str = "anonymous"
+    preferred_language: str = "en-IN"
 
-    # Language selection prompt
-    language_prompt = "Please choose your preferred language:"
-    language_options = [
-        "1. English (en-IN)",
-        "2. हिंदी (hi-IN)",
-        "3. বাংলা (bn-IN)",
-        "4. ગુજરાતી (gu-IN)",
-        "5. ಕನ್ನಡ (kn-IN)",
-        "6. മലയാളം (ml-IN)",
-        "7. मराठी (mr-IN)",
-        "8. ଓଡିଆ (od-IN)",
-        "9. ਪੰਜਾਬੀ (pa-IN)",
-        "10. தமிழ் (ta-IN)",
-        "11. తెలుగు (te-IN)"
-    ]
+@app.post("/chat")
+async def chat_endpoint(chat_request: ChatRequest):
+    try:
+        # Extract query, user ID, and preferred language from the request
+        query = chat_request.query
+        user_id = chat_request.user_id
+        preferred_language = chat_request.preferred_language
 
-    # Map choice to language code
-    language_map = {
-        "1": "en-IN",
-        "2": "hi-IN",
-        "3": "bn-IN",
-        "4": "gu-IN",
-        "5": "kn-IN",
-        "6": "ml-IN",
-        "7": "mr-IN",
-        "8": "od-IN",
-        "9": "pa-IN",
-        "10": "ta-IN",
-        "11": "te-IN"
-    }
-
-    # Prompt user for preferred language
-    print(language_prompt)
-    for option in language_options:
-        print(option)
-    language_choice = input("Enter the number corresponding to your preferred language: ").strip()
-
-    # Set preferred language
-    preferred_language = language_map.get(language_choice, "en-IN")  # Default to English if invalid choice
-
-    # Translate all English strings into the preferred language
-    welcome_message_translated = translate_text(welcome_message, source_lang="en-IN", target_lang=preferred_language, output_script="fully-native") or welcome_message
-    instructions_translated = translate_text(instructions, source_lang="en-IN", target_lang=preferred_language, output_script="fully-native") or instructions
-    update_info_prompt_translated = translate_text(update_info_prompt, source_lang="en-IN", target_lang=preferred_language, output_script="fully-native") or update_info_prompt
-    exit_prompt_translated = translate_text(exit_prompt, source_lang="en-IN", target_lang=preferred_language, output_script="fully-native") or exit_prompt
-
-    # Display translated welcome message and instructions
-    print(f"\n{welcome_message_translated}")
-    print(f"{instructions_translated}")
-    print(f"{update_info_prompt_translated}")
-    print(f"{exit_prompt_translated}\n")
-
-    # Ask user if they want to enter info at the start
-    first_time_prompt = translate_text("Would you like to enter your information now? (yes/no): ", source_lang="en-IN", target_lang=preferred_language, output_script="fully-native")
-    if not first_time_prompt:
-        first_time_prompt = "Would you like to enter your information now? (yes/no): "  # Fallback to English
-
-    user_response = input(first_time_prompt).strip()
-    translated_response = translate_text(user_response, source_lang=preferred_language, target_lang="en-IN")
-
-    if translated_response and is_positive_response(translated_response):
-        update_user_info(preferred_language)
-    else:
-        skip_message = translate_text("Skipping user info update.", source_lang="en-IN", target_lang=preferred_language, output_script="fully-native") or "Skipping user info update."
-        print(skip_message)
-    
-    while True:
-        query_prompt = translate_text("You: ", source_lang="en-IN", target_lang=preferred_language, output_script="fully-native") or "You: "
-        query = input(query_prompt).strip()
-        
-        if query.lower() in ['exit', 'quit']:
-            goodbye_message = translate_text("Chatbot: Goodbye!", source_lang="en-IN", target_lang=preferred_language, output_script="fully-native") or "Chatbot: Goodbye!"
-            print(goodbye_message)
-            break
-
-        elif query.lower() == 'update info':
-            update_user_info(preferred_language)
-            continue
-        
-        # Translate user input to English
+        # Translate the query to English
         translated_query = translate_text(query, source_lang=preferred_language, target_lang="en-IN", output_script="fully-native")
         if not translated_query:
-            translation_failed_message = translate_text("Chatbot: Translation failed. Falling back to English...", source_lang="en-IN", target_lang=preferred_language, output_script="fully-native") or "Chatbot: Translation failed. Falling back to English..."
-            print(translation_failed_message)
             translated_query = query  # Fallback to original query if translation fails
-        
+
         # Get top relevant documents from both datasets
         top_docs = find_most_relevant_documents(translated_query)
-        
+
         # Combine into context
         context = "\n\n".join(top_docs)
-        
+
         # Generate an answer from GPT-4o
         answer = generate_answer(context, translated_query)
-        
+
         # Translate the answer back to the user's preferred language
         translated_answer = translate_text(answer, source_lang="en-IN", target_lang=preferred_language, output_script="fully-native")
         if not translated_answer:
             translated_answer = answer  # Fallback to English if translation fails
-        
-        chatbot_response_prompt = translate_text("Chatbot: ", source_lang="en-IN", target_lang=preferred_language, output_script="fully-native") or "Chatbot: "
-        print(f"\n{chatbot_response_prompt}{translated_answer}\n")
 
         # Log the chat interaction
         log_chat_interaction(
-            user_id=user_info.get('user_id', 'anonymous'),  # Use user ID if available, else 'anonymous'
+            user_id=user_id,
             query=query,
             response=translated_answer,
             language=preferred_language
         )
 
-# ===== RUN THE CHATBOT =====
+        # Return the response
+        return {"response": translated_answer}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ===== RUN THE SERVER =====
 if __name__ == "__main__":
-    chat()
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
